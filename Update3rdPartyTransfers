@@ -1,0 +1,53 @@
+clear
+$Credential = $host.ui.PromptForCredential("Need credentials", "Please enter your user name and password.", "", "NetBiosUserName")
+Connect-Five9AdminWebService -Credential $Credential -Verbose -ErrorAction Stop
+
+$folderPath = ''
+
+$ivrScripts = Get-Five9IVRScript -Verbose
+
+foreach ($ivr in $ivrScripts)
+{
+     $ivr.xmlDefinition | Out-File "$(Join-Path $folderPath $ivr.name).five9ivr" -Encoding: utf8 -Force 
+}
+
+# Define the search and replace mappings
+$searchReplaceMap = @{
+#"Current TFN" = "Change to"
+
+#---------------------------
+
+"" = ""
+"" = ""
+
+
+#---------------------------
+
+}
+
+# Get all XML files in the folder
+Get-ChildItem -Path $folderPath -Filter "*.five9ivr" | ForEach-Object {
+    $filePath = $_.FullName
+    $scriptName = $_.BaseName
+    $fileContent = Get-Content -Path $filePath
+
+    # Initialize a flag to track if replacements were made
+    $isModified = $false
+
+    # Iterate over the search-replace pairs
+    foreach ($searchNumber in $searchReplaceMap.Keys) {
+        if ($fileContent -match $searchNumber) {
+            # Replace the search number with the corresponding replace number
+            $replaceNumber = $searchReplaceMap[$searchNumber]
+            $fileContent = $fileContent -replace $searchNumber, $replaceNumber
+            $isModified = $true
+        }
+    }
+
+    # If the file was modified, overwrite it with the updated content
+    if ($isModified) {
+        $fileContent | Set-Content -Path $filePath
+        #Set-Five9IVRScript -Name $scriptName -XmlDefinition $fileContent
+        Write-Output "Modified script: $scriptName"
+    }
+}
