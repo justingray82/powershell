@@ -1,0 +1,71 @@
+clear
+$Credential = $host.ui.PromptForCredential("Need credentials", "Please enter your user name and password.", "", "NetBiosUserName")
+Connect-Five9AdminWebService -Credential $Credential -Verbose -ErrorAction Stop
+
+# Define the folder containing the XML files
+$folderPath = ""
+
+# Define the output CSV file
+$outputCsv = ""
+
+$ivrScripts = Get-Five9IVRScript -Verbose
+
+foreach ($ivr in $ivrScripts)
+{
+     $ivr.xmlDefinition | Out-File "$(Join-Path $folderPath $ivr.name).five9ivr" -Encoding: utf8 -Force 
+}
+
+# Initialize an array to store the results
+$results = @()
+
+# Get all XML files in the folder
+$xmlFiles = Get-ChildItem -Path $folderPath -Filter *.five9ivr
+
+# Loop through each XML file
+foreach ($file in $xmlFiles) {
+    # Load the XML content
+    [xml]$xmlContent = Get-Content -Path $file.FullName
+    
+    # Initialize a list to collect matches for this file
+    $matches = @()
+    
+    # Loop through all <skillTransfer> elements
+    foreach ($skillTransfer in $xmlContent.ivrScript.modules.skillTransfer) {
+        # Check for <name> under <extrnalObj> (literal)
+        $nameValue = $skillTransfer.data.listOfSkillsEx.extrnalObj.name
+        if ($nameValue) {
+            $matches += "literal $nameValue"
+        }
+        
+        # Check for <variableName> (variable)
+        $variableSkillValue = $skillTransfer.data.listOfSkillsEx.variableName
+        if ($variableSkillValue) {
+            $matches += "variable $variableSkillValue"
+        }
+    }
+    
+    # Add the results to the array
+    $results += [PSCustomObject]@{
+        Filename = $file.Name
+        Matches  = $matches
+    }
+}
+
+# Prepare the data for CSV export
+$csvData = @()
+
+foreach ($result in $results) {
+    # Create a custom object for CSV output, dynamically expanding matches into separate columns
+    $outputRow = @{
+        Filename = $result.Filename
+    }
+    for ($i = 0; $i -lt $result.Matches.Count; $i++) {
+        $outputRow["Match$($i+1)"] = $result.Matches[$i]
+    }
+    $csvData += [PSCustomObject]$outputRow
+}
+
+# Export the data to a CSV file
+$csvData | Export-Csv -Path $outputCsv -NoTypeInformation -Force
+
+Write-Output "CSV has been generated at $outputCsv"
