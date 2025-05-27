@@ -1,0 +1,144 @@
+$Credential = $host.ui.PromptForCredential("Need credentials", "Please enter your user name and password.", "", "NetBiosUserName")
+Connect-Five9AdminWebService -Credential $Credential -Verbose -ErrorAction Stop
+
+# Specify the directory containing the XML files
+$directoryPath = ''
+# Specify the output CSV file path
+$outputCsvPath = ''
+
+$ivrScripts = Get-Five9IVRScript -Verbose
+
+foreach ($ivr in $ivrScripts)
+{
+     $ivr.xmlDefinition | Out-File "$(Join-Path $directoryPath $ivr.name).five9ivr" -Encoding: utf8 -Force 
+}
+
+# Ask if the user knows the name of the prompt
+$knowName = (Read-Host "Do you know the name of the prompt? (yes/no)").ToLower()
+$searchName = $null
+if ($knowName -eq "yes") {
+    $searchName = Read-Host "Enter the prompt name you'd like to search for"
+}
+
+# Initialize an array to store matched results
+$matchedResults = @()
+
+# Get all XML files in the folder
+$xmlFiles = Get-ChildItem -Path $directoryPath -Recurse -Filter *.five9ivr
+
+# Loop through each XML file
+foreach ($file in $xmlFiles) {
+    # Load the XML file content
+    [xml]$xmlContent = Get-Content -Path $file.FullName
+    
+    # Find all instances of <play> elements
+    $plays = $xmlContent.SelectNodes("//play")
+    
+    # Loop through each <play> element
+    foreach ($play in $plays) {
+        # Initialize variables for each element to clear them for each <play> instance
+        $value = $null
+        
+        # Extract <moduleName> and <name> values
+        $moduleName = $play.moduleName
+
+        # Combine multiple <name> elements into a single string separated by ";"
+        $value = ($play.data.prompt.filePrompt.promptData | ForEach-Object { $_.prompt.name }) -join "; "
+        
+        # Check if <name> is null, then process <ttsPrompt>
+        if ([string]::IsNullOrEmpty($value)) {
+            # Find the <ttsPrompt> element within <play>
+            $ttsPromptElement = $play.data.prompt.ttsPrompt
+
+            foreach ($ttsprompt in $ttsPromptElement) {
+                if ($ttsprompt -ne $null) {
+                    # Find the <xml> sub-element within <ttsPrompt>
+                    $xmlElement = $ttsprompt.SelectSingleNode("xml")
+                    if ($xmlElement -ne $null) {
+                        # Decode Base64 string
+                        $bytes = [System.Convert]::FromBase64String($xmlElement.'#text')
+
+                        # Decompress gzip data
+                        $result = [System.IO.Compression.GzipStream]::new(
+                            [System.IO.MemoryStream]::new($bytes),
+                            [System.IO.Compression.CompressionMode]::Decompress
+                        )
+
+                        # Read decompressed data as text
+                        $decodedValue = [System.IO.StreamReader]::new($result).ReadToEnd()
+
+                        # Parse decompressed data as XML to get <body> values
+                        [xml]$decodedXml = $decodedValue
+
+                        # Collect <body> elements from both potential paths
+                        $TTSbodies1 = @($decodedXml.speakElement.items.sayAsElement.items.textElement.body)
+                        $TTSbodies2 = @($decodedXml.speakElement.items.voiceElement.items.sayAsElement.items.textElement.body)
+
+                        # Combine the two collections into one, ignoring any empty elements
+                        $TTSbodies = $TTSbodies1 + $TTSbodies2 | Where-Object { $_ -ne "" }
+
+                        # Collect <variableName> elements
+                        $TTSvariables = @($decodedXml.speakElement.items.variableElement.variableName)
+
+                        # Initialize an array to store the result
+                        $TTS = @()
+
+                        # Calculate the maximum number of elements to loop over
+                        $maxCount = [math]::Max($TTSbodies.Count, $TTSvariables.Count)
+
+                        for ($i = 0; $i -lt $maxCount; $i++) {
+                            # Use conditional indexing to avoid errors when one collection has fewer items
+                            $bodyText = if ($i -lt $TTSbodies.Count) { $TTSbodies[$i] } else { "" }
+                            $variableText = if ($i -lt $TTSvariables.Count) { $TTSvariables[$i] } else { "" }
+    
+                            # Only add the pair if at least one part is non-empty
+                            if ($bodyText -ne "" -or $variableText -ne "") {
+                                $TTS += "$bodyText $variableText".Trim()
+                            }
+                        }
+
+                        # Join the array into a single string with a space separator
+                        $value = $TTS -join " "
+                        
+                    }
+                }
+            }
+        }
+        # If <name> and <text> are still null, check for <pausePrompt> and <timeout>
+        if ([string]::IsNullOrEmpty($value)) {
+            # Check for <pausePrompt> with <timeout> value
+            $pausePromptElement = $play.data.prompt.SelectSingleNode("pausePrompt/timeout")
+            if ($pausePromptElement -ne $null) {
+                $value = "Timeout: " + $pausePromptElement.InnerText
+            }
+        }
+
+        # Create the PSCustomObject for this entry
+        $entry = [PSCustomObject]@{
+            FileName   = $file.BaseName
+            ModuleName = $moduleName
+            Value      = $value
+        }
+
+        # Add to results if searchName is specified and matches, or add all entries if searchName is not set
+        if ($searchName) {
+            if ($entry.Value -match "\b$searchName\b") {
+                $matchedResults += $entry
+            }
+        } else {
+            $matchedResults += $entry
+        }
+    }
+}
+
+# Output matched results to CSV, or a message if no matches were found
+if ($matchedResults.Count -gt 0) {
+    # Output the results to a CSV file
+    $matchedResults | Export-Csv -Path $outputCsvPath -NoTypeInformation
+
+    # Optionally, output the result to console
+    $matchedResults
+    Write-Output "Results exported to $outputCsvPath."
+} else {
+    Write-Output "No matches found for '$searchName'."
+}
