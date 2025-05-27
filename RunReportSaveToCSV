@@ -1,0 +1,62 @@
+clear
+$creds = $host.ui.PromptForCredential("Need credentials", "Please enter your user name and password.", "", "NetBiosUserName")
+$domainUser = $creds.UserName.ToString()
+$authInfo = [System.Text.Encoding]::UTF8.GetBytes(("{0}:{1}" -f $domainUser,([Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($creds.Password)))))
+$authInfo = [System.Convert]::ToBase64String($authInfo)
+$auth = "Basic "+$authInfo
+
+$headers = New-Object "System.Collections.Generic.Dictionary[[String],[String]]"
+$headers.Add("SOAP-Action", "`"`"")
+$headers.Add("Authorization", $auth)
+$headers.Add("Content-Type", "application/xml")
+
+$body = "<soapenv:Envelope xmlns:soapenv=`"http://schemas.xmlsoap.org/soap/envelope/`" xmlns:ser=`"http://service.admin.ws.five9.com/`">`n
+<soapenv:Header/>`n
+    <soapenv:Body>`n
+        <ser:runReport>`n
+            <folderName></folderName>`n
+            <reportName></reportName>`n
+            <criteria>`n
+                <time>`n
+                    <end></end>`n
+                    <start></start>`n
+                </time>`n
+            </criteria>`n
+        </ser:runReport>`n
+    </soapenv:Body>`n
+</soapenv:Envelope>"
+
+$response = Invoke-RestMethod 'https://api.five9.com/wsadmin/v13/AdminWebService' -Method 'POST' -Headers $headers -Body $body -MaximumRedirection 0
+$response | ConvertTo-Json
+$identifier = $response.Envelope.Body.runReportResponse.return
+
+Do {
+
+$body = "<soapenv:Envelope xmlns:soapenv=`"http://schemas.xmlsoap.org/soap/envelope/`" xmlns:ser=`"http://service.admin.ws.five9.com/`">`n
+   <soapenv:Header/>'n
+   <soapenv:Body>'n
+      <ser:isReportRunning>'n
+         <!--Optional:-->'n
+         <identifier>" + $identifier + "</identifier>'n
+         <timeout>30</timeout>'n
+      </ser:isReportRunning>'n
+   </soapenv:Body>'n
+</soapenv:Envelope>"
+
+$response = Invoke-RestMethod 'https://api.five9.com/wsadmin/v12/AdminWebService' -Method 'POST' -Headers $headers -Body $body -MaximumRedirection 0
+
+} until ($response.Envelope.Body.isReportRunningResponse.return -eq 'false')
+
+
+$body = "<soapenv:Envelope xmlns:soapenv=`"http://schemas.xmlsoap.org/soap/envelope/`" xmlns:ser=`"http://service.admin.ws.five9.com/`">`n
+   <soapenv:Header/>'n
+   <soapenv:Body>'n
+      <ser:getReportResultCsv>'n
+         <!--Optional:-->
+         <identifier>" + $identifier + "</identifier>'n
+      </ser:getReportResultCsv>'n
+   </soapenv:Body>'n
+</soapenv:Envelope>"
+
+$response = Invoke-RestMethod 'https://api.five9.com/wsadmin/v12/AdminWebService' -Method 'POST' -Headers $headers -Body $body -MaximumRedirection 0
+$response.Envelope.Body.getReportResultCsvResponse.return | Out-File ""
