@@ -1,0 +1,60 @@
+$Credential = $host.ui.PromptForCredential("Need credentials", "Please enter your user name and password.", "", "NetBiosUserName")
+Connect-Five9AdminWebService -Credential $Credential -Verbose -ErrorAction Stop
+
+# Define the folder containing the XML files
+$folderPath = ""
+
+# Define the output CSV file
+$outputCsv = ""
+
+$ivrScripts = Get-Five9IVRScript -Verbose
+
+foreach ($ivr in $ivrScripts)
+{
+     $ivr.xmlDefinition | Out-File "$(Join-Path $folderPath $ivr.name).five9ivr" -Encoding: utf8 -Force 
+}
+
+# Initialize a Dictionary to store unique values with filenames
+$skillToFileMap = @{}
+
+# Get all XML files in the folder
+$xmlFiles = Get-ChildItem -Path $folderPath -Filter *.five9ivr
+
+# Loop through each XML file
+foreach ($file in $xmlFiles) {
+    # Load the XML content
+    [xml]$xmlContent = Get-Content -Path $file.FullName
+    $baseFileName = $file.BaseName  # Extracts the file name without extension
+    
+    # Loop through all <skillTransfer> elements
+    foreach ($skillTransfer in $xmlContent.ivrScript.modules.skillTransfer) {
+        # Check for <name> under <extrnalObj> (literal)
+        $nameValue = $skillTransfer.data.listOfSkillsEx.extrnalObj.name
+        if ($nameValue) {
+            if (-not $skillToFileMap.ContainsKey($nameValue)) {
+                $skillToFileMap[$nameValue] = @()
+            }
+            if ($baseFileName -notin $skillToFileMap[$nameValue]) {
+                $skillToFileMap[$nameValue] += $baseFileName
+            }
+        }
+        
+        # Check for <variableName> (variable)
+        $variableSkillValue = $skillTransfer.data.listOfSkillsEx.variableName
+        if ($variableSkillValue) {
+            if (-not $skillToFileMap.ContainsKey($variableSkillValue)) {
+                $skillToFileMap[$variableSkillValue] = @()
+            }
+            if ($baseFileName -notin $skillToFileMap[$variableSkillValue]) {
+                $skillToFileMap[$variableSkillValue] += $baseFileName
+            }
+        }
+    }
+}
+
+# Output the skills along with the files they were found in
+$skillToFileMap.GetEnumerator() | Sort-Object Name | ForEach-Object {
+    $skill = $_.Key
+    $files = ($_.Value -join ", ")  # Join multiple filenames into a single string
+    Write-Output "$skill : $files"
+}
