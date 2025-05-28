@@ -1,0 +1,19 @@
+#SOX required
+#https://sourceforge.net/projects/sox/files/sox/
+
+# Replace "C:\path\to\sox.exe" with the actual path to the sox executable.
+$soxPath = "C:\Program Files (x86)\sox-14-4-2\sox.exe"
+# Replace "C:\input\folder" with the path to the folder containing the input wave files.
+$inputFolder = "C:\input\folder"
+# Replace "C:\output\folder" with the path to the folder where you want to save the converted files.
+$outputFolder = "C:\output\folder"
+# Loop through all the wave files in the input folder
+Get-ChildItem -Path $inputFolder -Filter *.wav | ForEach-Object {
+    # Build the output file path
+    $ChildPath = $_.BaseName + ".wav"
+    $outputFilePath = Join-Path -Path $outputFolder -ChildPath $ChildPath
+        # Convert the file to μ-law WAV format using sox
+    & $soxPath $_.FullName -r 8000 -c 1 -e mu-law $outputFilePath
+        # Display the progress
+    Write-Host "Converted: $($_.Name) -> $(Split-Path -Leaf $outputFilePath)"
+}
