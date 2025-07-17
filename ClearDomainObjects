@@ -1,0 +1,87 @@
+clear
+$username = ''
+$password = '' | ConvertTo-SecureString -AsPlainText -Force
+$cred = New-Object -TypeName PSCredential -ArgumentList $username,$password
+Connect-Five9AdminWebService -Credential $cred
+
+# Choose your input method
+# Option 1: Manually defined list of usernames
+# $usernames = @("testuser1@testdomain.com","testuser2@testdomain.com")
+
+# Option 2: Load from CSV
+# $csvPath = "C:\Users\testuser\Documents\test.csv"
+# $usernames = (Import-Csv -Path $csvPath).Username
+
+foreach ($username in $usernames) {
+    Write-Host "`n--- Processing $username ---" -ForegroundColor Cyan
+
+    try {
+        # 1. Remove User
+        Remove-Five9User -Username $username -ErrorAction Stop
+        Write-Host "User $username removed." -ForegroundColor Green
+    } catch {
+        Write-Warning "Failed to remove user $username $_"
+    }
+
+    # 2. Stop and Remove Campaign (check both types: Inbound and Outbound)
+    $campaignTypes = @("Inbound", "Outbound")
+    $campaignFound = $false
+
+    foreach ($type in $campaignTypes) {
+        try {
+            $campaigns = Get-Five9Campaign -Type $type
+            $campaign = $campaigns | Where-Object { $_.Name -eq $username }
+
+            if ($campaign) {
+                $campaignFound = $true
+                if ($campaign.State -eq "RUNNING") {
+                    try {
+                        Stop-Five9Campaign -Name $username -ErrorAction Stop
+                        Write-Host "Campaign $username stopped." -ForegroundColor Yellow
+                    } catch {
+                        Write-Warning "Failed to stop campaign $username $_"
+                    }
+                }
+
+                try {
+                    Remove-Five9Campaign -Name $username -ErrorAction Stop
+                    Write-Host "Campaign $username removed." -ForegroundColor Green
+                } catch {
+                    Write-Warning "Failed to remove campaign $username $_"
+                }
+
+                break
+            }
+        } catch {
+            Write-Warning "Error retrieving $type campaigns: $_"
+        }
+    }
+
+    if (-not $campaignFound) {
+        Write-Host "No campaign found for $username in inbound or outbound." -ForegroundColor Gray
+    }
+
+    try {
+        # 3. Remove Campaign Profile
+        Remove-Five9CampaignProfile -Name $username -ErrorAction Stop
+        Write-Host "Campaign Profile $username removed." -ForegroundColor Green
+    } catch {
+        Write-Warning "Failed to remove campaign profile $username $_"
+    }
+
+    try {
+        # 4. Remove IVR Script
+        Remove-Five9IVRScript -Name $username -ErrorAction Stop
+        Write-Host "IVR Script $username removed." -ForegroundColor Green
+    } catch {
+        Write-Warning "Failed to remove IVR script $username $_"
+    }
+
+    try {
+        # 5. Remove Skill
+        Remove-Five9Skill -Name $username -ErrorAction Stop
+        Write-Host "Skill $username removed." -ForegroundColor Green
+    } catch {
+        Write-Warning "Failed to remove skill $username $_"
+    }
+}
