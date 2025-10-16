@@ -1,0 +1,188 @@
+function Update-SkillTransferAnnouncements {
+<#
+.EXAMPLE
+    Update-SkillTransferAnnouncements -FolderPath "C:\IVRFiles" -ModuleNames "SkillTransfer" -PromptName "Agents Busy" -PromptId "300000000000011" -Timeout 20 -Looped $true
+
+.EXAMPLE
+    Update-SkillTransferAnnouncements -FolderPath "C:\IVRFiles" -ModuleNames @("SkillTransfer", "CustomerService") -PromptName "Please Wait" -PromptId "300000000000012" -Timeout 30 -Looped $false
+#>
+
+param(
+    [Parameter(Mandatory=$true)]
+    [string]$FolderPath,
+    
+    [Parameter(Mandatory=$true)]
+    [string[]]$ModuleNames,
+    
+    [Parameter(Mandatory=$true)]
+    [string]$PromptName,
+    
+    [Parameter(Mandatory=$true)]
+    [string]$PromptId,
+    
+    [Parameter(Mandatory=$true)]
+    [int]$Timeout,
+    
+    [Parameter(Mandatory=$true)]
+    [bool]$Looped,
+    
+    [Parameter(Mandatory=$false)]
+    [bool]$Enabled = $true,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$AnnouncementType = "PROMPT"
+)
+
+# Validate folder path
+if (-not (Test-Path -Path $FolderPath -PathType Container)) {
+    Write-Error "Folder path '$FolderPath' does not exist."
+    return
+}
+
+# Get all XML files in the folder
+$xmlFiles = Get-ChildItem -Path $FolderPath -Filter "*.five9ivr" -File
+
+if ($xmlFiles.Count -eq 0) {
+    Write-Warning "No IVR files found in '$FolderPath'."
+    return
+}
+
+Write-Host "Found $($xmlFiles.Count) XML file(s) to process." -ForegroundColor Cyan
+
+# Counter for tracking changes
+$filesModified = 0
+$modulesModified = 0
+
+foreach ($file in $xmlFiles) {
+    Write-Host "`nProcessing file: $($file.Name)" -ForegroundColor Yellow
+    
+    try {
+        # Load XML with preserved formatting
+        [xml]$xmlDoc = Get-Content -Path $file.FullName -Raw
+        
+        # Flag to track if this file was modified
+        $fileChanged = $false
+        
+        # Find all skillTransfer nodes
+        $skillTransferNodes = $xmlDoc.SelectNodes("//skillTransfer")
+        
+        if ($skillTransferNodes.Count -eq 0) {
+            Write-Host "  No skillTransfer nodes found in this file." -ForegroundColor Gray
+            continue
+        }
+        
+        foreach ($skillTransfer in $skillTransferNodes) {
+            # Get the moduleName
+            $moduleName = $skillTransfer.moduleName
+            
+            # Check if this module name matches any in our list
+            if ($ModuleNames -contains $moduleName) {
+                Write-Host "  Found matching module: $moduleName" -ForegroundColor Green
+                
+                # Get the data node
+                $dataNode = $skillTransfer.SelectSingleNode("data")
+                
+                if ($dataNode -eq $null) {
+                    Write-Warning "  No 'data' node found in skillTransfer with module '$moduleName'."
+                    continue
+                }
+                
+                # Remove all existing announcements nodes
+                $existingAnnouncements = $dataNode.SelectNodes("announcements")
+                foreach ($announcement in $existingAnnouncements) {
+                    [void]$dataNode.RemoveChild($announcement)
+                }
+                
+                # Create new announcement node
+                $newAnnouncement = $xmlDoc.CreateElement("announcements")
+                
+                # Create and append enabled
+                $enabledNode = $xmlDoc.CreateElement("enabled")
+                $enabledNode.InnerText = $Enabled.ToString().ToLower()
+                [void]$newAnnouncement.AppendChild($enabledNode)
+                
+                # Create and append loopped
+                $looppedNode = $xmlDoc.CreateElement("loopped")
+                $looppedNode.InnerText = $Looped.ToString().ToLower()
+                [void]$newAnnouncement.AppendChild($looppedNode)
+                
+                # Create and append timeout
+                $timeoutNode = $xmlDoc.CreateElement("timeout")
+                $timeoutNode.InnerText = $Timeout.ToString()
+                [void]$newAnnouncement.AppendChild($timeoutNode)
+                
+                # Create prompt node with id and name
+                $promptNode = $xmlDoc.CreateElement("prompt")
+                
+                $idNode = $xmlDoc.CreateElement("id")
+                $idNode.InnerText = $PromptId
+                [void]$promptNode.AppendChild($idNode)
+                
+                $nameNode = $xmlDoc.CreateElement("name")
+                $nameNode.InnerText = $PromptName
+                [void]$promptNode.AppendChild($nameNode)
+                
+                [void]$newAnnouncement.AppendChild($promptNode)
+                
+                # Create and append annType
+                $annTypeNode = $xmlDoc.CreateElement("annType")
+                $annTypeNode.InnerText = $AnnouncementType
+                [void]$newAnnouncement.AppendChild($annTypeNode)
+                
+                # Append the new announcement to data node
+                [void]$dataNode.AppendChild($newAnnouncement)
+                
+                $fileChanged = $true
+                $modulesModified++
+                
+                Write-Host "  Updated announcements for module: $moduleName" -ForegroundColor Green
+            }
+        }
+        
+        # Save the file if changes were made
+        if ($fileChanged) {
+            # Create backup
+            $backupPath = "$($file.FullName).backup"
+            Copy-Item -Path $file.FullName -Destination $backupPath -Force
+            Write-Host "  Backup created: $($file.Name).backup" -ForegroundColor Cyan
+            
+            # Save with proper formatting
+            $xmlDoc.Save($file.FullName)
+            $filesModified++
+            Write-Host "  File saved successfully." -ForegroundColor Green
+        }
+        else {
+            Write-Host "  No matching modules found in this file." -ForegroundColor Gray
+        }
+    }
+    catch {
+        Write-Error "  Error processing file '$($file.Name)': $_"
+    }
+}
+
+# Summary
+Write-Host "`n========================================" -ForegroundColor Cyan
+Write-Host "Processing Complete" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "Files processed: $($xmlFiles.Count)" -ForegroundColor White
+Write-Host "Files modified: $filesModified" -ForegroundColor Green
+Write-Host "Modules updated: $modulesModified" -ForegroundColor Green
+Write-Host "========================================`n" -ForegroundColor Cyan
+
+}
+
+$username = ''
+$password = '' | ConvertTo-SecureString -AsPlainText -Force
+$cred = New-Object -TypeName PSCredential -ArgumentList $username,$password
+Connect-Five9AdminWebService -Credential $cred
+
+$exportPath = ''
+
+$ivrScripts = Get-Five9IVRScript -Verbose
+
+foreach ($ivr in $ivrScripts)
+{
+     $ivr.xmlDefinition | Out-File "$(Join-Path $exportPath $ivr.name).five9ivr" -Encoding: utf8 -Force 
+}
+
+Update-SkillTransferAnnouncements -FolderPath $exportPath -ModuleNames "Care Team- NewLicense (Single)" -PromptName "Inbound Media Collections" -PromptId "223140" -Enabled $true -Looped $false -Timeout 300
