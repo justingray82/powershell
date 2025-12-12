@@ -147,7 +147,10 @@ foreach ($file in $xmlFiles) {
             Write-Host "  Backup created: $($file.Name).backup" -ForegroundColor Cyan
             
             # Save with proper formatting
-            $xmlDoc.Save($file.FullName)
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            $writer = New-Object System.IO.StreamWriter($file.FullName, $false, $utf8NoBom)
+            $xmlDoc.Save($writer)
+            $writer.Close()
             $filesModified++
             Write-Host "  File saved successfully." -ForegroundColor Green
         }
@@ -182,7 +185,11 @@ $ivrScripts = Get-Five9IVRScript -Verbose
 
 foreach ($ivr in $ivrScripts)
 {
-     $ivr.xmlDefinition | Out-File "$(Join-Path $exportPath $ivr.name).five9ivr" -Encoding: utf8 -Force 
+
+$filePath = "$(Join-Path $exportPath $ivr.name).five9ivr"
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($filePath, $ivr.xmlDefinition, $utf8NoBom)
+
 }
 
-Update-SkillTransferAnnouncements -FolderPath $exportPath -ModuleNames "Care Team- NewLicense (Single)" -PromptName "Inbound Media Collections" -PromptId "223140" -Enabled $true -Looped $false -Timeout 300
+Update-SkillTransferAnnouncements -FolderPath $exportPath -ModuleNames "" -PromptName "" -PromptId "" -Enabled $true -Looped $false -Timeout 300
