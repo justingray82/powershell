@@ -1,0 +1,185 @@
+$five9Username = "
+$five9Password = ""
+
+
+function Get-Five9Token
+{
+
+    $body = @{
+        passwordCredentials = @{
+            username = $five9Username
+            password = $five9Password
+        }
+
+        "policy" = "ForceIn"
+
+    } | ConvertTo-Json
+
+
+    $header = @{"Content-Type"="application/json"}
+
+    return Invoke-RestMethod -Uri "https://app.five9.com/appsvcs/rs/svc/auth/login" -Method: Post -Body $body -Headers $header
+
+}
+
+
+function Start-Five9ApiSession
+{
+    param
+    (
+        [Parameter(Mandatory=$true)][object]$Token,
+        [Parameter(Mandatory=$true)][ValidateSet("Agent", "Supervisor")][string]$ApiType,
+        [Parameter(Mandatory=$true)][ValidateSet("CONNECTED","CONNECTING","DISCONNECTED")][string]$State,
+        [Parameter(Mandatory=$true)][ValidateSet("PSTN","SOFTPHONE","GATEWAY","EMPTY")][string]$StationType,
+        [Parameter(Mandatory=$false)][string]$StationId
+
+    )
+
+
+    $header = @{
+        Authorization = "Bearer-$($Token.tokenId)"
+        farmId = $Token.context.farmId
+        "Content-Type" = "application/json"
+    }
+
+    $body = @{
+        state =  $State
+        stationId =  $StationId
+        stationType =  $StationType
+    } | ConvertTo-Json
+
+
+    $baseUrl = "https://$($Token.metadata.dataCenters.apiUrls[0].host):$($Token.metadata.dataCenters.apiUrls[0].port)"
+
+    #$url = "$baseUrl/agents/$($Token.userId)/session_start"
+
+
+    if ($ApiType -eq "Agent")
+    {
+        $url = $baseUrl + "/appsvcs/rs/svc/agents/" + $Token.userId + "/session_start"
+    }
+    else
+    {
+        $url = $baseUrl + "/supsvcs/rs/svc/supervisors/" + $Token.userId + "/session_start"
+    }
+
+
+    Invoke-RestMethod -Method: Put -Uri $url -Headers $header -Body $body
+
+}
+
+function Invoke-Five9RestApi
+{
+    param
+    (
+        [Parameter(Mandatory=$true)][object]$Token,
+        [Parameter(Mandatory=$true)][ValidateSet("Agent", "Supervisor")][string]$ApiType,
+        [Parameter(Mandatory=$true)][ValidateSet("GET", "POST", "PUT")][string]$Method,
+        [Parameter(Mandatory=$true)][string]$ApiUrl,
+        [Parameter(Mandatory=$false)][string]$JsonBody = $null
+
+    )
+
+    $header = @{
+        Authorization = "Bearer-$($Token.tokenId)"
+        farmId = $Token.context.farmId
+        "Content-Type" = "application/json"
+    }
+
+    $baseUrl = "https://$($Token.metadata.dataCenters.apiUrls[0].host):$($Token.metadata.dataCenters.apiUrls[0].port)"
+
+    if ($ApiUrl -match '^/')
+    {
+        $ApiUrl = $ApiUrl -replace '^/', ''
+    }
+
+    if ($ApiType -eq "Agent")
+    {
+        $url = $baseUrl + "/appsvcs/rs/svc/" + $ApiUrl
+    }
+    else
+    {
+        $url = $baseUrl + "/supsvcs/rs/svc/" + $ApiUrl
+    }
+
+    if (!$JsonBody)
+    {
+        Invoke-RestMethod -Method: $Method -Uri $url -Headers $header
+    }
+    else
+    {
+        Invoke-RestMethod -Method: $Method -Uri $url -Headers $header -Body $JsonBody
+    }
+}
+
+function Stop-Five9ApiSession
+{
+    param
+    (
+        [Parameter(Mandatory=$true)][object]$Token,
+        [Parameter(Mandatory=$true)][ValidateSet("Agent", "Supervisor")][string]$ApiType,
+        [Parameter(Mandatory=$true)][ValidateSet("CONNECTED","CONNECTING","DISCONNECTED")][string]$State,
+        [Parameter(Mandatory=$true)][ValidateSet("PSTN","SOFTPHONE","GATEWAY","EMPTY")][string]$StationType,
+        [Parameter(Mandatory=$false)][string]$StationId
+    )
+    $header = @{
+        Authorization = "Bearer-$($Token.tokenId)"
+        farmId = $Token.context.farmId
+        "Content-Type" = "application/json"
+    }
+    $baseUrl = "https://$($Token.metadata.dataCenters.apiUrls[0].host):$($Token.metadata.dataCenters.apiUrls[0].port)"
+
+    if ($ApiType -eq "Agent")
+    {
+        $url = $baseUrl + "/appsvcs/rs/svc/agents/" + $Token.userId + "/session_stop?force=false"
+    }
+    else
+    {
+        $url = $baseUrl + "/supsvcs/rs/svc/supervisors/" + $Token.userId + "/session_stop?force=false"
+    }
+    Invoke-RestMethod -Method: Put -Uri $url -Headers $header
+}
+
+
+function Convert-EpochTime
+{
+    param
+    (
+        $EpochTime
+    )
+
+    try
+    {
+        return ([timezone]::CurrentTimeZone.ToLocalTime(([datetime]'1/1/1970').AddSeconds($EpochTime / 1000))).ToString("yyyy-MM-dd h:mmtt")
+    }
+    catch
+    {
+        return $null
+    }
+
+}
+
+$token = Get-Five9Token
+
+Start-Sleep -Seconds 3
+
+$orgId = $token.orgId
+$userId = $token.userId
+$userPresence = @()
+
+
+# agent 
+Start-Five9ApiSession -Token $token -ApiType Agent -State: DISCONNECTED -StationType: EMPTY -Verbose -ErrorAction: Stop
+
+# sup
+Start-Five9ApiSession -Token $token -ApiType Supervisor -State: DISCONNECTED -StationType: EMPTY -StationId "" -Verbose -ErrorAction: Stop
+
+
+$notices = Invoke-Five9RestApi -Token $token -ApiType Supervisor -Method GET -ApiUrl "/supervisors/$userId/maintenance_notices" -Verbose 
+
+foreach ($notice in $notices)
+{
+    $notices = Invoke-Five9RestApi -Token $token -ApiType Supervisor -Method PUT -ApiUrl "/supervisors/$userId/maintenance_notices/$($notice.id)/accept" -Verbose 
+}
+
+$agent_states = Invoke-Five9RestApi -Token $token -ApiType Supervisor -Method GET -ApiUrl "/orgs/$orgid/agent_states" -Verbose
